@@ -1,0 +1,5 @@
+.env
+*.env.*
+*-key.json
+tmpclaude-*
+test_*.ps1
