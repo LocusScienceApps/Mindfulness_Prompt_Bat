@@ -1,7 +1,9 @@
 <# :
 @echo off
 powershell -ExecutionPolicy Bypass -NoProfile -Command "& ([scriptblock]::Create((Get-Content -LiteralPath '%~f0' -Raw)))"
-pause
+echo.
+echo Press any key to close this window...
+pause >nul
 exit /b
 #>
 
@@ -11,41 +13,7 @@ Add-Type -AssemblyName System.Drawing
 $emDash = [char]0x2014
 
 # ============================================================
-# PROMPT 1 — Reminder text
-# ============================================================
-Write-Host ""
-Write-Host "1. What reminder do you want today?"
-Write-Host "   Press Enter to use the default: `"Are you doing what you should be doing?`""
-Write-Host "   Or type your own and press Enter:"
-$input1 = Read-Host "  "
-if ([string]::IsNullOrWhiteSpace($input1)) {
-    $reminderText = "Are you doing what you should be doing?"
-} else {
-    $reminderText = $input1.Trim()
-}
-
-# ============================================================
-# PROMPT 2 — Work session length
-# ============================================================
-Write-Host ""
-Write-Host "2. How long are your work sessions (`"pomodoros`"), in minutes?"
-Write-Host "   Press Enter for the default (25 minutes), or type a number and press Enter:"
-while ($true) {
-    $input2 = Read-Host "  "
-    if ([string]::IsNullOrWhiteSpace($input2)) {
-        $workMinutes = [double]25
-        break
-    }
-    $parsed = [double]0
-    if ([double]::TryParse($input2, [ref]$parsed) -and $parsed -gt 0) {
-        $workMinutes = $parsed
-        break
-    }
-    Write-Host "   Please enter a positive number."
-}
-
-# ============================================================
-# PROMPT 3 — Reminder interval (with divisibility validation)
+# UTILITY FUNCTIONS
 # ============================================================
 function Get-Divisors($total) {
     $divisors = @()
@@ -53,7 +21,6 @@ function Get-Divisors($total) {
     for ($n = 1; $n -le $maxN; $n++) {
         $d = $total / $n
         if ($d -lt 1) { continue }
-        # Round to 2 decimal places and verify it still divides evenly
         $dRounded = [math]::Round($d, 2)
         $check = $total / $dRounded
         if ([math]::Abs($check - [math]::Round($check)) -lt 0.001) {
@@ -71,133 +38,296 @@ function Get-Divisors($total) {
 
 function Format-Num($val) {
     if ($val -eq [math]::Floor($val)) { return [string][int]$val }
-    # Remove trailing zeros from decimal
-    return ([string]$val).TrimEnd('0').TrimEnd('.')
+    $rounded = [math]::Round($val, 2)
+    if ($rounded -eq [math]::Floor($rounded)) { return [string][int]$rounded }
+    return ([string]$rounded).TrimEnd('0').TrimEnd('.')
 }
 
-$defaultReminder = $workMinutes / 2
-$defaultReminderDisplay = Format-Num $defaultReminder
-$workDisplayPrompt = Format-Num $workMinutes
-Write-Host ""
-Write-Host "3. How often do you want a mindfulness reminder during work, in minutes?"
-Write-Host "   This must fit a whole number of times into your $workDisplayPrompt-minute work session."
-Write-Host "   Press Enter for the default ($defaultReminderDisplay minutes), or type a number and press Enter:"
-while ($true) {
-    $input3 = Read-Host "  "
-    if ([string]::IsNullOrWhiteSpace($input3)) {
-        $reminderMinutes = $defaultReminder
-        break
+function Format-Duration($totalMinutes) {
+    if ($totalMinutes -lt 1) {
+        $secs = [math]::Round($totalMinutes * 60)
+        return "${secs}s"
     }
-    $parsed = [double]0
-    if ([double]::TryParse($input3, [ref]$parsed) -and $parsed -gt 0) {
-        $ratio = $workMinutes / $parsed
-        if ([math]::Abs($ratio - [math]::Round($ratio)) -lt 0.0001) {
-            $reminderMinutes = $parsed
-            break
-        } else {
-            $divs = Get-Divisors $workMinutes
-            $divList = ($divs | ForEach-Object { Format-Num $_ }) -join ", "
-            Write-Host "   That doesn't fit a whole number of times into $workDisplayPrompt minutes."
-            Write-Host "   Some options that work: $divList"
-            Write-Host "   Try again:"
-        }
+    $hours = [math]::Floor($totalMinutes / 60)
+    $mins = [math]::Round($totalMinutes % 60)
+    if ($hours -gt 0 -and $mins -gt 0) { return "${hours}h ${mins}m" }
+    if ($hours -gt 0) { return "${hours}h" }
+    return "${mins}m"
+}
+
+function Round-ToSecond($minutes) {
+    return [math]::Round($minutes * 60) / 60
+}
+
+# ============================================================
+# QUICK START OR CUSTOMIZE
+# ============================================================
+Write-Host ""
+Write-Host "=== Mindfulness Prompter ==="
+Write-Host ""
+Write-Host "Press Enter to start with default settings, or S to customize:"
+$quickChoice = Read-Host " "
+
+if ([string]::IsNullOrWhiteSpace($quickChoice)) {
+    # Quick start with all defaults
+    $reminderText = "Are you doing what you should be doing?"
+    $workMinutes = [double]25
+    $reminderMinutes = [double]12.5
+    $shortBreakMinutes = [double]5        # 25 / 5
+    $pomsPerRound = 4
+    $longBreakMinutes = [double]20        # 4 * shortBreak
+    $totalRounds = 1
+    $dismissSeconds = 15
+    $playSound = $true
+} else {
+    # ========================================================
+    # PROMPT 1 — Reminder text
+    # ========================================================
+    Write-Host ""
+    Write-Host "1. What reminder do you want today?"
+    Write-Host "   Press Enter to use the default: `"Are you doing what you should be doing?`""
+    Write-Host "   Or type your own and press Enter:"
+    $inp = Read-Host "  "
+    if ([string]::IsNullOrWhiteSpace($inp)) {
+        $reminderText = "Are you doing what you should be doing?"
     } else {
+        $reminderText = $inp.Trim()
+    }
+
+    # ========================================================
+    # PROMPT 2 — Pomodoro length
+    # ========================================================
+    Write-Host ""
+    Write-Host "2. How long are your pomodoros (work sessions), in minutes?"
+    Write-Host "   Press Enter for the default (25 minutes), or type a number and press Enter:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $workMinutes = [double]25
+            break
+        }
+        $parsed = [double]0
+        if ([double]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+            $workMinutes = $parsed
+            break
+        }
         Write-Host "   Please enter a positive number."
     }
-}
 
-# ============================================================
-# PROMPT 4 — Break length
-# ============================================================
-Write-Host ""
-Write-Host "4. How long are your breaks between work sessions, in minutes?"
-Write-Host "   Press Enter for the default (5 minutes), or type a number and press Enter:"
-while ($true) {
-    $input4 = Read-Host "  "
-    if ([string]::IsNullOrWhiteSpace($input4)) {
-        $breakMinutes = [double]5
-        break
+    # ========================================================
+    # PROMPT 3 — Reminder interval (with validation)
+    # ========================================================
+    $defaultReminder = $workMinutes / 2
+    $defaultReminderDisplay = Format-Num $defaultReminder
+    $workDisplayPrompt = Format-Num $workMinutes
+    Write-Host ""
+    Write-Host "3. How often do you want a mindfulness reminder during work, in minutes?"
+    Write-Host "   This must fit a whole number of times into your $workDisplayPrompt-minute pomodoro."
+    Write-Host "   Press Enter for the default ($defaultReminderDisplay minutes), or type a number and press Enter:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $reminderMinutes = $defaultReminder
+            break
+        }
+        $parsed = [double]0
+        if ([double]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+            $ratio = $workMinutes / $parsed
+            if ([math]::Abs($ratio - [math]::Round($ratio)) -lt 0.0001) {
+                $reminderMinutes = $parsed
+                break
+            } else {
+                $divs = Get-Divisors $workMinutes
+                $divList = ($divs | ForEach-Object { Format-Num $_ }) -join ", "
+                Write-Host "   That doesn't fit a whole number of times into $workDisplayPrompt minutes."
+                Write-Host "   Some options that work: $divList"
+                Write-Host "   Try again:"
+            }
+        } else {
+            Write-Host "   Please enter a positive number."
+        }
     }
-    $parsed = [double]0
-    if ([double]::TryParse($input4, [ref]$parsed) -and $parsed -gt 0) {
-        $breakMinutes = $parsed
-        break
-    }
-    Write-Host "   Please enter a positive number."
-}
 
-# ============================================================
-# PROMPT 5 — Dismiss delay
-# ============================================================
-Write-Host ""
-Write-Host "5. How many seconds should the reminder stay on screen before you can dismiss it?"
-Write-Host "   This gives you time to actually reflect on the prompt."
-Write-Host "   Press Enter for the default (15 seconds), or type a number and press Enter:"
-while ($true) {
-    $input5 = Read-Host "  "
-    if ([string]::IsNullOrWhiteSpace($input5)) {
-        $dismissSeconds = 15
-        break
+    # ========================================================
+    # PROMPT 4 — Short break length (scaled default)
+    # ========================================================
+    $defaultShort = Round-ToSecond ($workMinutes / 5)
+    $defaultShortDisplay = Format-Num $defaultShort
+    Write-Host ""
+    Write-Host "4. How long are short breaks between pomodoros, in minutes?"
+    Write-Host "   Press Enter for the default ($defaultShortDisplay minutes), or type a number and press Enter:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $shortBreakMinutes = $defaultShort
+            break
+        }
+        $parsed = [double]0
+        if ([double]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+            $shortBreakMinutes = $parsed
+            break
+        }
+        Write-Host "   Please enter a positive number."
     }
-    $parsed = 0
-    if ([int]::TryParse($input5, [ref]$parsed) -and $parsed -gt 0) {
-        $dismissSeconds = $parsed
-        break
-    }
-    Write-Host "   Please enter a positive whole number."
-}
 
-# ============================================================
-# PROMPT 6 — Sound
-# ============================================================
-Write-Host ""
-Write-Host "6. Play a sound when reminders appear?"
-Write-Host "   Press Enter for the default (yes), or type N and press Enter for no sound:"
-while ($true) {
-    $input6 = Read-Host "  "
-    if ([string]::IsNullOrWhiteSpace($input6) -or $input6.Trim() -match '^(y|yes)$') {
-        $playSound = $true
-        break
+    # ========================================================
+    # PROMPT 5 — Pomodoros per round
+    # ========================================================
+    Write-Host ""
+    Write-Host "5. How many pomodoros in each round (before a long break)?"
+    Write-Host "   Press Enter for the default (4), or type a number and press Enter:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $pomsPerRound = 4
+            break
+        }
+        $parsed = 0
+        if ([int]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+            $pomsPerRound = $parsed
+            break
+        }
+        Write-Host "   Please enter a positive whole number."
     }
-    if ($input6.Trim() -match '^(n|no)$') {
-        $playSound = $false
-        break
+
+    # ========================================================
+    # PROMPT 6 — Long break length
+    # ========================================================
+    $defaultLong = Round-ToSecond (4 * $shortBreakMinutes)
+    $defaultLongDisplay = Format-Num $defaultLong
+    Write-Host ""
+    Write-Host "6. How long should the long break between rounds be, in minutes?"
+    Write-Host "   Press Enter for the default ($defaultLongDisplay minutes), or type a number and press Enter:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $longBreakMinutes = $defaultLong
+            break
+        }
+        $parsed = [double]0
+        if ([double]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+            $longBreakMinutes = $parsed
+            break
+        }
+        Write-Host "   Please enter a positive number."
     }
-    Write-Host "   Please enter Y or N."
+
+    # ========================================================
+    # PROMPT 7 — Number of rounds
+    # ========================================================
+    Write-Host ""
+    Write-Host "7. How many rounds before the session ends?"
+    Write-Host "   Press Enter for the default (1 round), type a number, or type 0 to run until stopped:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $totalRounds = 1
+            break
+        }
+        $parsed = 0
+        if ([int]::TryParse($inp, [ref]$parsed) -and $parsed -ge 0) {
+            $totalRounds = $parsed
+            break
+        }
+        Write-Host "   Please enter 0 (unlimited) or a positive whole number."
+    }
+
+    # ========================================================
+    # PROMPT 8 — Dismiss delay
+    # ========================================================
+    Write-Host ""
+    Write-Host "8. How many seconds should reminders stay on screen before you can dismiss them?"
+    Write-Host "   This gives you time to actually reflect on the prompt."
+    Write-Host "   Press Enter for the default (15 seconds), or type a number and press Enter:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp)) {
+            $dismissSeconds = 15
+            break
+        }
+        $parsed = 0
+        if ([int]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+            $dismissSeconds = $parsed
+            break
+        }
+        Write-Host "   Please enter a positive whole number."
+    }
+
+    # ========================================================
+    # PROMPT 9 — Sound
+    # ========================================================
+    Write-Host ""
+    Write-Host "9. Play a sound when reminders appear?"
+    Write-Host "   Press Enter for the default (yes), or type N and press Enter for no sound:"
+    while ($true) {
+        $inp = Read-Host "  "
+        if ([string]::IsNullOrWhiteSpace($inp) -or $inp.Trim() -match '^(y|yes)$') {
+            $playSound = $true
+            break
+        }
+        if ($inp.Trim() -match '^(n|no)$') {
+            $playSound = $false
+            break
+        }
+        Write-Host "   Please enter Y or N."
+    }
 }
 
 # ============================================================
 # SUMMARY
 # ============================================================
 $soundText = if ($playSound) { "On" } else { "Off" }
-$reminderDisplay = Format-Num $reminderMinutes
 $workDisplay = Format-Num $workMinutes
-$breakDisplay = Format-Num $breakMinutes
+$reminderDisplay = Format-Num $reminderMinutes
+$shortBreakDisplay = Format-Num $shortBreakMinutes
+$longBreakDisplay = Format-Num $longBreakMinutes
+$roundsDisplay = if ($totalRounds -eq 0) { "Unlimited" } else { [string]$totalRounds }
+
+# Calculate total session time
+$roundWorkMin = $pomsPerRound * $workMinutes + ($pomsPerRound - 1) * $shortBreakMinutes
+$roundWithLongMin = $roundWorkMin + $longBreakMinutes
+if ($totalRounds -eq 0) {
+    $totalTimeDisplay = "Runs until stopped"
+} elseif ($totalRounds -eq 1) {
+    $totalTimeDisplay = Format-Duration $roundWorkMin
+} else {
+    $totalMin = ($totalRounds - 1) * $roundWithLongMin + $roundWorkMin
+    $totalTimeDisplay = Format-Duration $totalMin
+}
 
 Write-Host ""
 Write-Host "=========================================="
 Write-Host "  YOUR SETTINGS:"
-Write-Host "  Reminder:      `"$reminderText`""
-Write-Host "  Work:          $workDisplay min"
-Write-Host "  Remind every:  $reminderDisplay min"
-Write-Host "  Break:         $breakDisplay min"
-Write-Host "  Dismiss delay: $dismissSeconds sec"
-Write-Host "  Sound:         $soundText"
+Write-Host "  Reminder:        `"$reminderText`""
+Write-Host "  Pomodoro:        $workDisplay min"
+Write-Host "  Remind every:    $reminderDisplay min"
+Write-Host "  Short break:     $shortBreakDisplay min"
+Write-Host "  Pomodoros/round: $pomsPerRound"
+Write-Host "  Long break:      $longBreakDisplay min"
+Write-Host "  Rounds:          $roundsDisplay"
+Write-Host "  Dismiss delay:   $dismissSeconds sec"
+Write-Host "  Sound:           $soundText"
+Write-Host "  ---"
+Write-Host "  Total session:   $totalTimeDisplay"
 Write-Host "=========================================="
 Write-Host ""
 Write-Host "You're all set. Press Enter when you're ready to begin."
 Read-Host | Out-Null
 
 # ============================================================
-# CONVERT TO SECONDS FOR TIMING
+# CONVERT TO SECONDS AND COMPUTE TIMING
 # ============================================================
-$workSec = $workMinutes * 60
-$breakSec = $breakMinutes * 60
-$reminderSec = $reminderMinutes * 60
-$cycleSec = $workSec + $breakSec
+$workSec = [math]::Round($workMinutes * 60)
+$shortBreakSec = [math]::Round($shortBreakMinutes * 60)
+$longBreakSec = [math]::Round($longBreakMinutes * 60)
+$reminderSec = $reminderMinutes * 60   # no rounding — must divide evenly into workSec
+$miniCycleSec = $workSec + $shortBreakSec
+$roundSec = ($pomsPerRound - 1) * $miniCycleSec + $workSec + $longBreakSec
+$lastRoundSec = ($pomsPerRound - 1) * $miniCycleSec + $workSec
+$remindersPerWork = [int][math]::Round($workSec / $reminderSec)
 
 # ============================================================
-# POPUP STATE
+# POPUP STATE AND FUNCTIONS
 # ============================================================
 $script:currentForm = $null
 $script:popupButton = $null
@@ -205,9 +335,6 @@ $script:popupTimer = $null
 $script:dismissCountdown = 0
 $script:forceClose = $false
 
-# ============================================================
-# POPUP FUNCTIONS
-# ============================================================
 function Show-Popup {
     param(
         [string]$Title,
@@ -215,12 +342,8 @@ function Show-Popup {
         [int]$DismissDelay,
         [bool]$Sound
     )
-
     Close-Popup
-
-    if ($Sound) {
-        [System.Media.SystemSounds]::Exclamation.Play()
-    }
+    if ($Sound) { [System.Media.SystemSounds]::Exclamation.Play() }
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = $Title
@@ -229,15 +352,15 @@ function Show-Popup {
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.Width = 420
-    $form.Height = 220
+    $form.Width = 450
+    $form.Height = 240
     $form.ShowInTaskbar = $true
 
     $label = New-Object System.Windows.Forms.Label
     $label.Text = $Body
     $label.AutoSize = $false
-    $label.Width = 380
-    $label.Height = 110
+    $label.Width = 410
+    $label.Height = 130
     $label.Location = New-Object System.Drawing.Point(15, 15)
     $label.Font = New-Object System.Drawing.Font("Segoe UI", 11)
     $label.TextAlign = "MiddleCenter"
@@ -246,7 +369,7 @@ function Show-Popup {
     $button = New-Object System.Windows.Forms.Button
     $button.Width = 120
     $button.Height = 35
-    $button.Location = New-Object System.Drawing.Point(145, 135)
+    $button.Location = New-Object System.Drawing.Point(160, 155)
     $button.Font = New-Object System.Drawing.Font("Segoe UI", 10)
     $button.Enabled = $false
     $button.Text = "Wait (${DismissDelay}s)..."
@@ -256,7 +379,6 @@ function Show-Popup {
     $script:popupButton = $button
     $script:dismissCountdown = $DismissDelay
 
-    # Countdown timer using script-scope variables for reliable access
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 1000
     $timer.Add_Tick({
@@ -279,12 +401,11 @@ function Show-Popup {
         $script:currentForm.Close()
     })
 
-    # Prevent user from closing during countdown; allow programmatic close
     $form.Add_FormClosing({
         if (-not $script:forceClose -and $script:dismissCountdown -gt 0) {
             $_.Cancel = $true
         } else {
-            $script:popupTimer.Stop()
+            if ($script:popupTimer -ne $null) { $script:popupTimer.Stop() }
         }
     })
 
@@ -307,7 +428,7 @@ function Close-Popup {
 }
 
 # ============================================================
-# EVENT LOG + LIVE STATUS DISPLAY
+# DISPLAY FUNCTIONS
 # ============================================================
 $script:logLines = @()
 $script:statusAreaTop = -1
@@ -330,18 +451,12 @@ function Refresh-Display {
 function Update-Status {
     param([string[]]$Lines)
     if ($script:statusAreaTop -lt 0) { return }
-    try {
-        $width = [Console]::WindowWidth
-    } catch {
-        $width = 80
-    }
+    try { $width = [Console]::WindowWidth } catch { $width = 80 }
     [Console]::SetCursorPosition(0, $script:statusAreaTop)
     foreach ($line in $Lines) {
-        $padded = $line.PadRight($width - 1)
-        Write-Host $padded
+        Write-Host ($line.PadRight($width - 1))
     }
-    $blank = "".PadRight($width - 1)
-    Write-Host $blank
+    Write-Host ("".PadRight($width - 1))
 }
 
 # ============================================================
@@ -349,45 +464,123 @@ function Update-Status {
 # ============================================================
 $startTime = Get-Date
 $lastEventKey = ""
+$sessionComplete = $false
 
-Write-Log "Pomodoro #1 started"
+$roundsLabel = if ($totalRounds -eq 0) { "" } else { "/$totalRounds" }
+
+Write-Log "Pomodoro #1 started (Round 1$roundsLabel, Pom 1/$pomsPerRound)"
 Refresh-Display
 
-$remindersPerWork = [int][math]::Round($workSec / $reminderSec)
-
-while ($true) {
+while (-not $sessionComplete) {
     Start-Sleep -Milliseconds 300
     [System.Windows.Forms.Application]::DoEvents()
 
     $now = Get-Date
     $elapsed = ($now - $startTime).TotalSeconds
 
-    # Where are we in the cycle?
-    $cycleIndex = [math]::Floor($elapsed / $cycleSec)
-    $cycleOffset = $elapsed - ($cycleIndex * $cycleSec)
+    # --- Determine round and offset within round ---
+    if ($totalRounds -eq 0) {
+        # Infinite mode: every round has a long break
+        $roundIndex = [math]::Floor($elapsed / $roundSec)
+        $roundOffset = $elapsed - ($roundIndex * $roundSec)
+        $isLastRound = $false
+    } else {
+        # Finite mode: last round has no long break
+        $allButLastSec = ($totalRounds - 1) * $roundSec
 
-    $currentPom = $cycleIndex + 1
-    $inWork = $cycleOffset -lt $workSec
+        # Check for session complete
+        if ($elapsed -ge $allButLastSec + $lastRoundSec) {
+            $sessionComplete = $true
+            $totalPoms = $totalRounds * $pomsPerRound
+            $actualMin = $elapsed / 60
+            Close-Popup
+            $bodyText = "$reminderText`r`n`r`nAll $totalRounds round(s) done! $totalPoms pomodoros in $(Format-Duration $actualMin).`r`nGreat work!"
+            Show-Popup -Title "Session Complete!" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
+            Write-Log "Session complete! $totalPoms pomodoros in $(Format-Duration $actualMin)."
+            Refresh-Display
+            # Wait for user to dismiss the popup
+            while ($script:currentForm -ne $null -and -not $script:currentForm.IsDisposed) {
+                Start-Sleep -Milliseconds 200
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+            continue
+        }
+
+        if ($elapsed -lt $allButLastSec) {
+            $roundIndex = [math]::Floor($elapsed / $roundSec)
+            $roundOffset = $elapsed - ($roundIndex * $roundSec)
+        } else {
+            $roundIndex = $totalRounds - 1
+            $roundOffset = $elapsed - $allButLastSec
+        }
+        $isLastRound = ($roundIndex -eq $totalRounds - 1)
+    }
+
+    $roundNum = $roundIndex + 1
+
+    # --- Determine position within round ---
+    # A round: (N-1) mini-cycles [work+short] + last pom [work + long break]
+    $firstPartSec = ($pomsPerRound - 1) * $miniCycleSec
+
+    if ($roundOffset -lt $firstPartSec) {
+        # In one of the first (N-1) pom slots (work + short break)
+        $pomInRound = [math]::Floor($roundOffset / $miniCycleSec)
+        $miniOffset = $roundOffset - ($pomInRound * $miniCycleSec)
+        if ($miniOffset -lt $workSec) {
+            $phase = "work"
+            $workPhaseOffset = $miniOffset
+        } else {
+            $phase = "short_break"
+            $breakPhaseOffset = $miniOffset - $workSec
+        }
+    } else {
+        # In the last pom slot of the round
+        $pomInRound = $pomsPerRound - 1
+        $lastPomOffset = $roundOffset - $firstPartSec
+        if ($lastPomOffset -lt $workSec) {
+            $phase = "work"
+            $workPhaseOffset = $lastPomOffset
+        } else {
+            # Long break (only reached if not the last round — handled by session-complete check above)
+            $phase = "long_break"
+            $breakPhaseOffset = $lastPomOffset - $workSec
+        }
+    }
+
+    $pomInRoundNum = $pomInRound + 1
+    $globalPom = $roundIndex * $pomsPerRound + $pomInRoundNum
     $statusLines = @()
 
-    if ($inWork) {
-        $reminderIndex = [math]::Floor($cycleOffset / $reminderSec)
-        $eventKey = "c${cycleIndex}_r${reminderIndex}"
+    # --- WORK PHASE ---
+    if ($phase -eq "work") {
+        $reminderIndex = [math]::Floor($workPhaseOffset / $reminderSec)
+        $eventKey = "r${roundIndex}_p${pomInRound}_w${reminderIndex}"
 
         if ($eventKey -ne $lastEventKey) {
             $lastEventKey = $eventKey
 
-            if ($reminderIndex -eq 0 -and $cycleIndex -gt 0) {
-                # End of break -> new work session
-                $brkNum = $cycleIndex
-                Close-Popup
-                $bodyText = "$reminderText`r`n`r`nBreak #$brkNum is over! Pomodoro #$currentPom is starting now. ($workDisplay-minute work session)"
-                Show-Popup -Title "Mindfulness Check $emDash Back to Work" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
-                Write-Log "Pomodoro #$currentPom started"
-                Refresh-Display
+            if ($reminderIndex -eq 0) {
+                if ($roundIndex -eq 0 -and $pomInRound -eq 0) {
+                    # Very first pomodoro — already logged at startup
+                }
+                elseif ($pomInRound -eq 0) {
+                    # First pom of a new round (came from long break)
+                    Close-Popup
+                    $bodyText = "$reminderText`r`n`r`nRound $roundIndex complete! Round $roundNum starting.`r`nPomodoro #$globalPom begins. ($workDisplay-min work session)"
+                    Show-Popup -Title "Mindfulness Check $emDash New Round" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
+                    Write-Log "Pomodoro #$globalPom started (Round $roundNum$roundsLabel, Pom $pomInRoundNum/$pomsPerRound)"
+                    Refresh-Display
+                }
+                else {
+                    # Came from a short break
+                    Close-Popup
+                    $bodyText = "$reminderText`r`n`r`nBreak over! Pomodoro #$globalPom starting. ($workDisplay-min work session)"
+                    Show-Popup -Title "Mindfulness Check $emDash Back to Work" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
+                    Write-Log "Pomodoro #$globalPom started (Round $roundNum$roundsLabel, Pom $pomInRoundNum/$pomsPerRound)"
+                    Refresh-Display
+                }
             }
             elseif ($reminderIndex -gt 0 -and $reminderIndex -lt $remindersPerWork) {
-                # Mid-session mindfulness reminder
                 Close-Popup
                 Show-Popup -Title "Mindfulness Check" -Body $reminderText -DismissDelay $dismissSeconds -Sound $playSound
                 Write-Log "Mindfulness check"
@@ -395,49 +588,81 @@ while ($true) {
             }
         }
 
-        # Calculate countdown timers for status display
-        $nextReminderAt = ([math]::Floor($cycleOffset / $reminderSec) + 1) * $reminderSec
+        # Status countdowns
+        $nextReminderAt = ([math]::Floor($workPhaseOffset / $reminderSec) + 1) * $reminderSec
         if ($nextReminderAt -gt $workSec) { $nextReminderAt = $workSec }
-        $secsToReminder = [math]::Max(0, $nextReminderAt - $cycleOffset)
-        $secsToBreak = [math]::Max(0, $workSec - $cycleOffset)
+        $secsToReminder = [math]::Max(0, $nextReminderAt - $workPhaseOffset)
+        $secsToBreak = [math]::Max(0, $workSec - $workPhaseOffset)
 
         $remMin = [math]::Floor($secsToReminder / 60)
         $remSec = [int]($secsToReminder % 60)
         $brkMin = [math]::Floor($secsToBreak / 60)
         $brkSec = [int]($secsToBreak % 60)
 
+        # Label for what kind of break is next
+        if ($pomInRound -lt $pomsPerRound - 1) {
+            $nextBreakLabel = ""
+        } elseif ($isLastRound) {
+            $nextBreakLabel = " (session ends)"
+        } else {
+            $nextBreakLabel = " (long break)"
+        }
+
         $statusLines = @(
             "Mindfulness Prompter is running",
             "Next reminder in: ${remMin}:$($remSec.ToString('00'))",
-            "Next break in: ${brkMin}:$($brkSec.ToString('00'))",
-            "[Pomodoro #$currentPom $emDash Work]"
+            "Next break in: ${brkMin}:$($brkSec.ToString('00'))$nextBreakLabel",
+            "[Pomodoro #$globalPom $emDash Round $roundNum$roundsLabel, Pom $pomInRoundNum/$pomsPerRound $emDash Work]"
         )
     }
-    else {
-        # Break phase
-        $breakElapsed = $cycleOffset - $workSec
-        $currentBreakNum = $cycleIndex + 1
-
-        $eventKey = "c${cycleIndex}_break"
+    # --- SHORT BREAK ---
+    elseif ($phase -eq "short_break") {
+        $eventKey = "r${roundIndex}_p${pomInRound}_sbreak"
         if ($eventKey -ne $lastEventKey) {
             $lastEventKey = $eventKey
             Close-Popup
-            $bodyText = "$reminderText`r`n`r`nPomodoro #$currentPom complete! Take a $breakDisplay-minute break."
-            Show-Popup -Title "Mindfulness Check $emDash Break Time" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
-            Write-Log "Break #$currentBreakNum started ($breakDisplay min)"
+            $bodyText = "$reminderText`r`n`r`nPomodoro #$globalPom complete! Take a $shortBreakDisplay-min short break."
+            Show-Popup -Title "Mindfulness Check $emDash Short Break" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
+            Write-Log "Short break ($shortBreakDisplay min) $emDash after Pom $pomInRoundNum/$pomsPerRound"
             Refresh-Display
         }
 
-        $secsToWork = [math]::Max(0, $breakSec - $breakElapsed)
-        $wMin = [math]::Floor($secsToWork / 60)
-        $wSec = [int]($secsToWork % 60)
+        $secsLeft = [math]::Max(0, $shortBreakSec - $breakPhaseOffset)
+        $m = [math]::Floor($secsLeft / 60)
+        $s = [int]($secsLeft % 60)
 
         $statusLines = @(
             "Mindfulness Prompter is running",
-            "Break #$currentBreakNum ends in: ${wMin}:$($wSec.ToString('00'))",
-            "[Break #$currentBreakNum]"
+            "Short break ends in: ${m}:$($s.ToString('00'))",
+            "[Short Break $emDash after Pomodoro #$globalPom]",
+            "Round $roundNum$roundsLabel, Pom $pomInRoundNum/$pomsPerRound complete"
+        )
+    }
+    # --- LONG BREAK ---
+    elseif ($phase -eq "long_break") {
+        $eventKey = "r${roundIndex}_lbreak"
+        if ($eventKey -ne $lastEventKey) {
+            $lastEventKey = $eventKey
+            Close-Popup
+            $bodyText = "$reminderText`r`n`r`nRound $roundNum complete! Take a $longBreakDisplay-min long break."
+            Show-Popup -Title "Mindfulness Check $emDash Long Break" -Body $bodyText -DismissDelay $dismissSeconds -Sound $playSound
+            Write-Log "Long break ($longBreakDisplay min) $emDash Round $roundNum$roundsLabel complete!"
+            Refresh-Display
+        }
+
+        $secsLeft = [math]::Max(0, $longBreakSec - $breakPhaseOffset)
+        $m = [math]::Floor($secsLeft / 60)
+        $s = [int]($secsLeft % 60)
+
+        $statusLines = @(
+            "Mindfulness Prompter is running",
+            "Long break ends in: ${m}:$($s.ToString('00'))",
+            "[Long Break $emDash Round $roundNum$roundsLabel complete]"
         )
     }
 
     Update-Status $statusLines
 }
+
+Write-Host ""
+Write-Host "Session ended. Well done!"
