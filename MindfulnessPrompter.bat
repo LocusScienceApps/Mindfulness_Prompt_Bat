@@ -255,26 +255,44 @@ function Run-CustomizeFlow {
         $result.pomsPerRound = $ppr
         $qNum++
 
-        # Number of sets
-        $defSets = $defaults.totalRounds
-        $defSetsLabel = if ($defSets -eq 0) { "unlimited" } else { "$defSets" }
+        # More than one set?
+        $defMultiple = ($defaults.totalRounds -ne 1)
+        $defMultiLabel = if ($defMultiple) { "yes" } else { "no" }
         Write-Host ""
-        Write-Host "$qNum. How many sets?"
-        Write-Host "   Press Enter for the default ($defSetsLabel),"
-        Write-Host "   type a different number, or 0 for unlimited:"
-        $tr = $null
-        while ($tr -eq $null) {
+        Write-Host "$qNum. Would you like to do more than one set?"
+        Write-Host "   Press Enter for $defMultiLabel, or type Y/N:"
+        $wantMultiple = $null
+        while ($wantMultiple -eq $null) {
             $inp = Read-Host "  "
-            if ([string]::IsNullOrWhiteSpace($inp)) { $tr = [int]$defSets; break }
-            $parsed = 0
-            if ([int]::TryParse($inp, [ref]$parsed) -and $parsed -ge 0) { $tr = $parsed; break }
-            Write-Host "   Please enter 0 (unlimited) or a positive whole number."
+            if ([string]::IsNullOrWhiteSpace($inp)) { $wantMultiple = $defMultiple; break }
+            if ($inp.Trim() -match '^(y|yes)$') { $wantMultiple = $true; break }
+            if ($inp.Trim() -match '^(n|no)$') { $wantMultiple = $false; break }
+            Write-Host "   Please enter Y or N."
         }
-        $result.totalRounds = $tr
         $qNum++
 
+        if ($wantMultiple) {
+            # How many sets?
+            Write-Host ""
+            Write-Host "$qNum. How many sets?"
+            Write-Host "   Type a number, or 0 for unlimited:"
+            $tr = $null
+            while ($tr -eq $null) {
+                $inp = Read-Host "  "
+                if ([string]::IsNullOrWhiteSpace($inp)) { Write-Host "   Please enter a number."; continue }
+                $parsed = 0
+                if ([int]::TryParse($inp, [ref]$parsed) -and $parsed -ge 0 -and $parsed -ne 1) { $tr = $parsed; break }
+                if ($parsed -eq 1) { Write-Host "   That's just one set. Type a number greater than 1, or 0 for unlimited."; continue }
+                Write-Host "   Please enter 0 (unlimited) or a number greater than 1."
+            }
+            $result.totalRounds = $tr
+            $qNum++
+        } else {
+            $result.totalRounds = 1
+        }
+
         # Long break — only ask if more than 1 set
-        if ($tr -ne 1) {
+        if ($wantMultiple) {
             $defLong = Round-ToSecond (4 * $sbm)
             Write-Host ""
             Write-Host "$qNum. How long is the long break between sets?"
