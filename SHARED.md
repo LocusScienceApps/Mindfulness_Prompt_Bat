@@ -66,19 +66,22 @@ A Windows .bat file (batch-to-PowerShell hybrid) that serves as a combined mindf
 - Preset selection: number to load, number+V to view details (e.g., "1V")
 - Save options after customize: Enter/P(reset)/D(efault)/V(iew)/B(ack)
 - Auto-generated preset names based on differences from defaults
-- Fixed preset save bug using direct property assignment instead of Add-Member
 - Updated all timer loops to use M instead of R
+- Committed and pushed to GitHub
+- **Bug introduced:** Preset save used direct property assignment (`$settings.presets.$presetKey = ...`) which fails on new/empty PSCustomObject properties
+
+### Session 3 follow-up — 2026-02-24
+- Fixed preset save bug: replaced broken direct property assignment with `Add-Member -NotePropertyName ... -Force` (correct way to add dynamic properties to PSCustomObject)
+- Presets (slots 1-5) now save and load correctly
 - Committed and pushed to GitHub
 
 **Current state:**
-- Major rewrite complete and committed
-- All new features implemented and ready for testing
-- Settings structure completely changed (old settings files will need migration or reset)
+- All features working including preset save/load
+- Settings structure completely changed (old settings files from sessions 1-2 won't work — recreate presets/defaults)
 
 **Next session priorities:**
-1. **USER TESTING** — Test all flows end-to-end
-2. Fix any bugs discovered during testing
-3. Consider adding Back navigation during customize questions (currently only available after customize completes)
+1. Continue user testing all flows end-to-end
+2. Consider adding Back navigation during customize questions (currently only available after customize completes)
 
 **Known limitations:**
 - No Back navigation during customize questions (would require state-machine rewrite)

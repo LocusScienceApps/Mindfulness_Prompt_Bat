@@ -702,8 +702,7 @@ function Save-AsPresetNew($settingsObj, $mode, $defaults) {
     if ($settings -eq $null) { $settings = [pscustomobject]@{ presets = [pscustomobject]@{} } }
     if ($settings.presets -eq $null) { $settings.presets = [pscustomobject]@{} }
 
-    # Use direct property assignment instead of Add-Member (fixes the bug)
-    $settings.presets.$presetKey = $presetData
+    $settings.presets | Add-Member -NotePropertyName $presetKey -NotePropertyValue $presetData -Force
 
     Save-Settings $settings
     Write-Host "Saved as `"$presetName`" in slot $slot!"
