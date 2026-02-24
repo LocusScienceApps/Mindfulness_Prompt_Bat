@@ -18,18 +18,20 @@ A Windows .bat file (batch-to-PowerShell hybrid) that serves as a combined mindf
 - **Popup close prevention:** Use `$script:forceClose` flag to distinguish user X-click (blocked during countdown) from programmatic close (always allowed).
 - **`$env:BAT_DIR`**: Batch header passes `%~dp0` to PowerShell via environment variable so the JSON settings file is always saved in the same folder as the .bat file.
 
-## Current Features (as of 2026-02-13)
-- **3-mode selection at startup:** Pomodoro only (P), Mindfulness only (R), or Both (B)
-- **Mode-specific flows:** Each mode only shows/asks about relevant settings
-  - P: work, break, sessions/set, long break, sets, sound (6 questions)
-  - R: prompt text, interval, dismiss delay, sound (4 questions)
-  - B: all 9 questions
-- **Presets system (slots 0-9):** Save named presets with S at summary screen, load by pressing number at startup. Presets store the mode.
-- **Settings management (M at startup):** Edit defaults (D), manage presets (P: rename/delete), factory reset (R)
-- **Persistent settings:** `MindfulPrompter-settings.json` in same folder as .bat (created on first save, not at startup). In `.gitignore`.
+## Current Features (as of 2026-02-24)
+- **Two-level flow:** Choose mode (M/P/B), then mode-specific menu with Enter/P/C/D/V/B options
+- **Mode-specific settings:** Completely separate defaults and presets for each mode
+  - **Mindfulness (M)**: 15min default interval (divides into 60min), must validate to 60min divisors
+  - **Pomodoro (P)**: 25min work, 0sec dismiss delay (immediately closeable)
+  - **Both (B)**: 25min work, 12.5min prompts (divides into work session)
+- **Mode-specific presets (slots 1-5 per mode):** P1-P5, M1-M5, B1-B5 (15 total)
+  - Load with number (e.g., "1"), view details with number+V (e.g., "1V")
+  - Auto-generated names based on differences from defaults
+  - Shows available vs occupied slots when saving
+- **No auto-display of settings:** Press V anywhere to view current/default settings
+- **Save options after customize:** Enter (start), P (save preset), D (save defaults with confirmation), V (view), B (back)
+- **Settings storage:** `MindfulPrompter-settings.json` with defaultsP/defaultsM/defaultsB and mode-prefixed preset keys
 - **Session-complete popup:** Larger window (500x300) with detailed stats, auto-dismiss after 60 seconds
-- **Mindfulness-only mode:** Separate simple timer loop, runs indefinitely until window closed
-- **Pomodoro-only mode:** Transition popups without mindfulness text, short 3s dismiss, no mid-work prompts
 - **Terminology:** "sets" not "rounds", "sessions" not "pomodoros", "prompt" not "reminder", "break" not "short break"
 
 ## Session History
@@ -53,14 +55,36 @@ A Windows .bat file (batch-to-PowerShell hybrid) that serves as a combined mindf
 - Long break hidden from defaults/summary displays when sets = 1
 - Committed and pushed to GitHub
 
+### Session 3 — 2026-02-24
+- **MAJOR REWRITE:** Complete redesign of settings architecture and UI flow based on user testing feedback
+- Implemented mode-specific defaults (defaultsP/M/B) and presets (P1-P5, M1-M5, B1-B5)
+- Changed M mode default from 12.5min to 15min (divides evenly into 60min clock cycle)
+- Added validation: M mode intervals must divide evenly into 60 minutes
+- New two-level flow: choose mode first, then mode-specific menu
+- Removed all auto-display of settings — press V to view everywhere
+- Changed shortcut letters: M=Mindfulness (was R), removed global Settings option
+- Preset selection: number to load, number+V to view details (e.g., "1V")
+- Save options after customize: Enter/P(reset)/D(efault)/V(iew)/B(ack)
+- Auto-generated preset names based on differences from defaults
+- Fixed preset save bug using direct property assignment instead of Add-Member
+- Updated all timer loops to use M instead of R
+- Committed and pushed to GitHub
+
 **Current state:**
-- All features built; user testing in progress
-- Question wording and ordering updated per user feedback
+- Major rewrite complete and committed
+- All new features implemented and ready for testing
+- Settings structure completely changed (old settings files will need migration or reset)
 
 **Next session priorities:**
-1. User testing feedback — fix any bugs found
-2. Commit and push latest changes (mode selection, all recent work)
-3. Any polish from testing
+1. **USER TESTING** — Test all flows end-to-end
+2. Fix any bugs discovered during testing
+3. Consider adding Back navigation during customize questions (currently only available after customize completes)
+
+**Known limitations:**
+- No Back navigation during customize questions (would require state-machine rewrite)
+- Old settings files (from sessions 1-2) won't work with new structure — users will need to recreate presets/defaults
 
 **Future features:**
-- Shared sessions (multiple people get the same prompts together over the network) — likely requires the Electron/web wrapper app, not feasible in batch file alone
+- Back navigation during customize flow (significant refactor)
+- Preset management UI (rename/delete existing presets)
+- Shared sessions (network feature - requires Electron/web app)
