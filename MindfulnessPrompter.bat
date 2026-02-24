@@ -60,9 +60,33 @@ function Round-ToSecond($minutes) {
 }
 
 # ============================================================
-# HARDCODED DEFAULTS (factory values)
+# HARDCODED DEFAULTS (factory values) - separate for each mode
 # ============================================================
-$script:FACTORY_DEFAULTS = @{
+$script:FACTORY_DEFAULTS_P = @{
+    reminderText = ""
+    workMinutes = [double]25
+    reminderMinutes = [double]25
+    shortBreakMinutes = [double]5
+    pomsPerRound = 4
+    longBreakMinutes = [double]20
+    totalRounds = 1
+    dismissSeconds = 0
+    playSound = $true
+}
+
+$script:FACTORY_DEFAULTS_M = @{
+    reminderText = "Are you doing what you should be doing?"
+    workMinutes = [double]0
+    reminderMinutes = [double]15
+    shortBreakMinutes = [double]0
+    pomsPerRound = 0
+    longBreakMinutes = [double]0
+    totalRounds = 0
+    dismissSeconds = 15
+    playSound = $true
+}
+
+$script:FACTORY_DEFAULTS_B = @{
     reminderText = "Are you doing what you should be doing?"
     workMinutes = [double]25
     reminderMinutes = [double]12.5
@@ -94,22 +118,32 @@ function Save-Settings($settingsObj) {
 }
 
 function Get-Defaults {
+    param($mode = 'B')
+
+    # Determine which factory defaults to use
+    $factory = switch ($mode) {
+        'P' { $script:FACTORY_DEFAULTS_P }
+        'M' { $script:FACTORY_DEFAULTS_M }
+        default { $script:FACTORY_DEFAULTS_B }
+    }
+
     $settings = Load-Settings
-    if ($settings -ne $null -and $settings.defaults -ne $null) {
-        $d = $settings.defaults
+    $defaultsKey = "defaults$mode"
+    if ($settings -ne $null -and $settings.PSObject.Properties[$defaultsKey] -ne $null) {
+        $d = $settings.$defaultsKey
         return @{
-            reminderText = if ($d.reminderText) { $d.reminderText } else { $script:FACTORY_DEFAULTS.reminderText }
-            workMinutes = [double]$(if ($d.workMinutes) { $d.workMinutes } else { $script:FACTORY_DEFAULTS.workMinutes })
-            reminderMinutes = [double]$(if ($d.reminderMinutes) { $d.reminderMinutes } else { $script:FACTORY_DEFAULTS.reminderMinutes })
-            shortBreakMinutes = [double]$(if ($d.shortBreakMinutes) { $d.shortBreakMinutes } else { $script:FACTORY_DEFAULTS.shortBreakMinutes })
-            pomsPerRound = [int]$(if ($d.pomsPerRound) { $d.pomsPerRound } else { $script:FACTORY_DEFAULTS.pomsPerRound })
-            longBreakMinutes = [double]$(if ($d.longBreakMinutes) { $d.longBreakMinutes } else { $script:FACTORY_DEFAULTS.longBreakMinutes })
-            totalRounds = [int]$(if ($d.PSObject.Properties['totalRounds'] -ne $null) { $d.totalRounds } else { $script:FACTORY_DEFAULTS.totalRounds })
-            dismissSeconds = [int]$(if ($d.dismissSeconds) { $d.dismissSeconds } else { $script:FACTORY_DEFAULTS.dismissSeconds })
-            playSound = if ($d.PSObject.Properties['playSound'] -ne $null) { [bool]$d.playSound } else { $script:FACTORY_DEFAULTS.playSound }
+            reminderText = if ($d.PSObject.Properties['reminderText'] -ne $null) { $d.reminderText } else { $factory.reminderText }
+            workMinutes = [double]$(if ($d.workMinutes) { $d.workMinutes } else { $factory.workMinutes })
+            reminderMinutes = [double]$(if ($d.reminderMinutes) { $d.reminderMinutes } else { $factory.reminderMinutes })
+            shortBreakMinutes = [double]$(if ($d.shortBreakMinutes) { $d.shortBreakMinutes } else { $factory.shortBreakMinutes })
+            pomsPerRound = [int]$(if ($d.pomsPerRound) { $d.pomsPerRound } else { $factory.pomsPerRound })
+            longBreakMinutes = [double]$(if ($d.longBreakMinutes) { $d.longBreakMinutes } else { $factory.longBreakMinutes })
+            totalRounds = [int]$(if ($d.PSObject.Properties['totalRounds'] -ne $null) { $d.totalRounds } else { $factory.totalRounds })
+            dismissSeconds = [int]$(if ($d.PSObject.Properties['dismissSeconds'] -ne $null) { $d.dismissSeconds } else { $factory.dismissSeconds })
+            playSound = if ($d.PSObject.Properties['playSound'] -ne $null) { [bool]$d.playSound } else { $factory.playSound }
         }
     }
-    return $script:FACTORY_DEFAULTS.Clone()
+    return $factory.Clone()
 }
 
 function Get-Presets {
@@ -118,6 +152,23 @@ function Get-Presets {
         return $settings.presets
     }
     return $null
+}
+
+function Get-PresetsForMode {
+    param($mode)
+
+    $allPresets = Get-Presets
+    if ($allPresets -eq $null) { return $null }
+
+    $modePresets = [pscustomobject]@{}
+    foreach ($prop in $allPresets.PSObject.Properties) {
+        if ($prop.Name -match "^$mode\d+$") {
+            $modePresets | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value
+        }
+    }
+
+    if ($modePresets.PSObject.Properties.Count -eq 0) { return $null }
+    return $modePresets
 }
 
 function Apply-Settings($s) {
@@ -148,22 +199,26 @@ function Get-CurrentSettingsObject {
 }
 
 function Format-PresetLine($key, $preset) {
+    # Extract slot number from key (e.g., "P1" -> "1", "M3" -> "3")
+    $slotNum = $key -replace '^[PMB]', ''
+
     $pMode = if ($preset.mode) { $preset.mode } else { 'B' }
     if ($pMode -eq 'P') {
         $w = Format-Num $preset.workMinutes
         $b = Format-Num $preset.shortBreakMinutes
         $s = $preset.pomsPerRound
-        return "  $key $emDash $($preset.name) [Pomodoro] (${w}m work, ${b}m break, $s sessions)"
+        return "  $slotNum $emDash $($preset.name) (${w}m work, ${b}m break, $s sessions)"
     }
-    elseif ($pMode -eq 'R') {
+    elseif ($pMode -eq 'M') {
         $r = Format-Num $preset.reminderMinutes
-        return "  $key $emDash $($preset.name) [Mindfulness] (every ${r}m)"
+        return "  $slotNum $emDash $($preset.name) (every ${r}m)"
     }
     else {
         $w = Format-Num $preset.workMinutes
+        $r = Format-Num $preset.reminderMinutes
         $b = Format-Num $preset.shortBreakMinutes
         $s = $preset.pomsPerRound
-        return "  $key $emDash $($preset.name) [Both] (${w}m work, ${b}m break, $s sessions)"
+        return "  $slotNum $emDash $($preset.name) (${w}m work, every ${r}m, ${b}m break, $s sessions)"
     }
 }
 
@@ -205,7 +260,7 @@ function Run-CustomizeFlow {
     $qNum = 1
 
     # --- Pomodoro questions (modes P and B) ---
-    if ($flowMode -ne 'R') {
+    if ($flowMode -ne 'M') {
         # Work session length
         Write-Host ""
         Write-Host "$qNum. How long is each work session?"
@@ -353,10 +408,11 @@ function Run-CustomizeFlow {
             $result.reminderMinutes = $rm
         }
         else {
-            # Mindfulness only — no fit constraint
+            # Mindfulness only — must divide evenly into 60 minutes
             $defReminder = $defaults.reminderMinutes
             Write-Host ""
             Write-Host "$qNum. How often should the prompt appear?"
+            Write-Host "   Must divide evenly into 60 minutes."
             Write-Host "   Press Enter for the default ($(Format-Num $defReminder) minutes),"
             Write-Host "   or type a different number of minutes:"
             $rm = $null
@@ -364,8 +420,18 @@ function Run-CustomizeFlow {
                 $inp = Read-Host "  "
                 if ([string]::IsNullOrWhiteSpace($inp)) { $rm = [double]$defReminder; break }
                 $parsed = [double]0
-                if ([double]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) { $rm = $parsed; break }
-                Write-Host "   Please enter a positive number."
+                if ([double]::TryParse($inp, [ref]$parsed) -and $parsed -gt 0) {
+                    $ratio = 60 / $parsed
+                    if ([math]::Abs($ratio - [math]::Round($ratio)) -lt 0.0001) { $rm = $parsed; break }
+                    else {
+                        $divs = Get-Divisors 60
+                        $divList = ($divs | ForEach-Object { Format-Num $_ }) -join ", "
+                        Write-Host "   That doesn't divide evenly into 60 minutes."
+                        Write-Host "   Try 7.5, 15, or 30 minutes (or any value that divides evenly into 60)."
+                        Write-Host "   All valid options: $divList"
+                        Write-Host "   Try again:"
+                    }
+                } else { Write-Host "   Please enter a positive number." }
             }
             $result.reminderMinutes = $rm
         }
@@ -390,7 +456,7 @@ function Run-CustomizeFlow {
     }
 
     # --- Mindfulness-only: number of prompts ---
-    if ($flowMode -eq 'R') {
+    if ($flowMode -eq 'M') {
         Write-Host ""
         Write-Host "$qNum. How many prompts before the session ends?"
         Write-Host "   Press Enter for unlimited,"
@@ -553,6 +619,97 @@ function Show-PresetManagement {
 # ============================================================
 # SAVE-AS-PRESET FLOW
 # ============================================================
+function Save-AsPresetNew($settingsObj, $mode, $defaults) {
+    $modePresets = Get-PresetsForMode $mode
+
+    # Find available and occupied slots
+    $occupiedSlots = @()
+    $availableSlots = @(1,2,3,4,5)
+
+    if ($modePresets -ne $null) {
+        foreach ($prop in $modePresets.PSObject.Properties) {
+            $slotNum = $prop.Name -replace '^[PMB]', ''
+            $occupiedSlots += [int]$slotNum
+            $availableSlots = $availableSlots | Where-Object { $_ -ne [int]$slotNum }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "=== Save as Preset ($(Get-ModeName $mode)) ==="
+    Write-Host ""
+
+    if ($availableSlots.Count -gt 0) {
+        Write-Host "Available slots: $($availableSlots -join ', ')"
+        Write-Host ""
+    }
+
+    if ($occupiedSlots.Count -gt 0) {
+        Write-Host "Occupied slots:"
+        $sortedOccupied = $occupiedSlots | Sort-Object
+        foreach ($num in $sortedOccupied) {
+            $presetKey = "$mode$num"
+            $preset = $modePresets.$presetKey
+            Write-Host "  $num $emDash $($preset.name)"
+        }
+        Write-Host ""
+    }
+
+    $firstAvailable = if ($availableSlots.Count -gt 0) { $availableSlots[0] } else { 1 }
+    Write-Host "Which slot (1-5)? Press Enter to select the first available slot ($firstAvailable):"
+    $slot = $null
+    while ($slot -eq $null) {
+        $inp = Read-Host " "
+        if ([string]::IsNullOrWhiteSpace($inp)) { $slot = [string]$firstAvailable; break }
+        if ($inp -match '^[1-5]$') { $slot = $inp; break }
+        Write-Host "  Please enter a number from 1 to 5."
+    }
+
+    # Check if slot is occupied
+    $presetKey = "$mode$slot"
+    if ($occupiedSlots -contains [int]$slot) {
+        $existingName = $modePresets.$presetKey.name
+        Write-Host "Slot $slot is occupied by `"$existingName`". Overwrite? (Y/N):"
+        $confirm = Read-Host " "
+        if ($confirm -notmatch '^[Yy]$') {
+            Write-Host "Cancelled."
+            return $false
+        }
+    }
+
+    # Generate suggested name
+    $suggestedName = Generate-PresetName $settingsObj $defaults $mode
+
+    Write-Host "Suggested name: `"$suggestedName`""
+    Write-Host "Press Enter to use this name, or type your own:"
+    $nameInp = Read-Host " "
+    $presetName = if ([string]::IsNullOrWhiteSpace($nameInp)) { $suggestedName } else { $nameInp.Trim() }
+
+    $presetData = @{
+        name = $presetName
+        mode = $mode
+        reminderText = $settingsObj.reminderText
+        workMinutes = $settingsObj.workMinutes
+        reminderMinutes = $settingsObj.reminderMinutes
+        shortBreakMinutes = $settingsObj.shortBreakMinutes
+        pomsPerRound = $settingsObj.pomsPerRound
+        longBreakMinutes = $settingsObj.longBreakMinutes
+        totalRounds = $settingsObj.totalRounds
+        dismissSeconds = $settingsObj.dismissSeconds
+        playSound = $settingsObj.playSound
+    }
+
+    $settings = Load-Settings
+    if ($settings -eq $null) { $settings = [pscustomobject]@{ presets = [pscustomobject]@{} } }
+    if ($settings.presets -eq $null) { $settings.presets = [pscustomobject]@{} }
+
+    # Use direct property assignment instead of Add-Member (fixes the bug)
+    $settings.presets.$presetKey = $presetData
+
+    Save-Settings $settings
+    Write-Host "Saved as `"$presetName`" in slot $slot!"
+    return $true
+}
+
 function Save-AsPreset($settingsObj) {
     $presets = Get-Presets
     Write-Host ""
@@ -609,229 +766,397 @@ function Save-AsPreset($settingsObj) {
 }
 
 # ============================================================
+# HELPER FUNCTIONS FOR NEW UI FLOW
+# ============================================================
+
+function Get-ModeName($mode) {
+    switch ($mode) {
+        'P' { return "Pomodoro Sessions" }
+        'M' { return "Mindfulness Sessions" }
+        'B' { return "Pomodoro + Mindfulness Sessions" }
+        default { return "Unknown Mode" }
+    }
+}
+
+function Show-ViewSettings($settingsObj, $mode) {
+    $soundText = if ($settingsObj.playSound) { "On" } else { "Off" }
+    Write-Host ""
+    Write-Host "=== Current Settings ==="
+    Write-Host ""
+
+    if ($mode -eq 'P') {
+        $workDisplay = Format-Num $settingsObj.workMinutes
+        $shortBreakDisplay = Format-Num $settingsObj.shortBreakMinutes
+        $longBreakDisplay = Format-Num $settingsObj.longBreakMinutes
+        $setsDisplay = if ($settingsObj.totalRounds -eq 0) { "Unlimited" } else { [string]$settingsObj.totalRounds }
+
+        Write-Host "  Work session:    $workDisplay min"
+        Write-Host "  Break:           $shortBreakDisplay min"
+        Write-Host "  Sessions/set:    $($settingsObj.pomsPerRound)"
+        if ($settingsObj.totalRounds -ne 1) {
+            Write-Host "  Long break:      $longBreakDisplay min"
+        }
+        Write-Host "  Sets:            $setsDisplay"
+        Write-Host "  Sound:           $soundText"
+    }
+    elseif ($mode -eq 'M') {
+        $reminderDisplay = Format-Num $settingsObj.reminderMinutes
+        $promptsDisplay = if ($settingsObj.totalRounds -eq 0) { "Unlimited" } else { "$($settingsObj.totalRounds)" }
+
+        Write-Host "  Prompt:          `"$($settingsObj.reminderText)`""
+        Write-Host "  Prompt every:    $reminderDisplay min"
+        Write-Host "  Dismiss delay:   $($settingsObj.dismissSeconds) sec"
+        Write-Host "  Prompts:         $promptsDisplay"
+        Write-Host "  Sound:           $soundText"
+    }
+    else {
+        Show-SettingsSummary $settingsObj
+    }
+
+    Write-Host ""
+    Write-Host "Press Enter to continue..."
+    Read-Host | Out-Null
+}
+
+function Show-PresetSelection($mode) {
+    $modePresets = Get-PresetsForMode $mode
+
+    if ($modePresets -eq $null -or $modePresets.PSObject.Properties.Count -eq 0) {
+        Write-Host ""
+        Write-Host "No saved presets for this mode yet."
+        Start-Sleep -Seconds 1
+        return $null
+    }
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "=== Saved Presets ($(Get-ModeName $mode)) ==="
+        Write-Host ""
+
+        # Show presets sorted by slot number
+        $presetList = @()
+        foreach ($prop in $modePresets.PSObject.Properties) {
+            $presetList += $prop
+        }
+        $presetList = $presetList | Sort-Object { $_.Name -replace '^\D+', '' -as [int] }
+
+        foreach ($prop in $presetList) {
+            Write-Host (Format-PresetLine $prop.Name $prop.Value)
+        }
+
+        Write-Host ""
+        Write-Host "  Enter the preset number (1-5) and press Enter to load and start a saved preset"
+        Write-Host "  Enter the preset number followed by V to view preset details (1V, 2V, etc.)"
+        Write-Host "  B $emDash Back"
+        Write-Host ""
+        Write-Host "Choose an option:"
+        $choice = Read-Host " "
+
+        if ($choice -match '^[Bb]$') {
+            return $null
+        }
+        elseif ($choice -match '^([1-5])[Vv]$') {
+            # View details
+            $slotNum = $Matches[1]
+            $presetKey = "$mode$slotNum"
+            if ($modePresets.PSObject.Properties[$presetKey] -ne $null) {
+                $preset = $modePresets.$presetKey
+                $presetSettings = @{
+                    reminderText = $preset.reminderText
+                    workMinutes = [double]$preset.workMinutes
+                    reminderMinutes = [double]$preset.reminderMinutes
+                    shortBreakMinutes = [double]$preset.shortBreakMinutes
+                    pomsPerRound = [int]$preset.pomsPerRound
+                    longBreakMinutes = [double]$preset.longBreakMinutes
+                    totalRounds = [int]$preset.totalRounds
+                    dismissSeconds = [int]$preset.dismissSeconds
+                    playSound = [bool]$preset.playSound
+                }
+                Show-ViewSettings $presetSettings $mode
+            } else {
+                Write-Host "  No preset in slot $slotNum."
+                Start-Sleep -Seconds 1
+            }
+        }
+        elseif ($choice -match '^[1-5]$') {
+            # Load preset
+            $slotNum = $choice
+            $presetKey = "$mode$slotNum"
+            if ($modePresets.PSObject.Properties[$presetKey] -ne $null) {
+                $preset = $modePresets.$presetKey
+                Write-Host ""
+                Write-Host "Loaded preset: `"$($preset.name)`""
+                Start-Sleep -Seconds 1
+                return @{
+                    reminderText = $preset.reminderText
+                    workMinutes = [double]$preset.workMinutes
+                    reminderMinutes = [double]$preset.reminderMinutes
+                    shortBreakMinutes = [double]$preset.shortBreakMinutes
+                    pomsPerRound = [int]$preset.pomsPerRound
+                    longBreakMinutes = [double]$preset.longBreakMinutes
+                    totalRounds = [int]$preset.totalRounds
+                    dismissSeconds = [int]$preset.dismissSeconds
+                    playSound = [bool]$preset.playSound
+                }
+            } else {
+                Write-Host "  No preset in slot $slotNum."
+                Start-Sleep -Seconds 1
+            }
+        }
+        else {
+            Write-Host "  Invalid choice."
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+
+function Generate-PresetName($settingsObj, $defaults, $mode) {
+    $diffs = @()
+
+    if ($mode -eq 'P') {
+        if ($settingsObj.workMinutes -ne $defaults.workMinutes) {
+            $diffs += "$(Format-Num $settingsObj.workMinutes)m work"
+        }
+        if ($settingsObj.shortBreakMinutes -ne $defaults.shortBreakMinutes) {
+            $diffs += "$(Format-Num $settingsObj.shortBreakMinutes)m break"
+        }
+        if ($settingsObj.pomsPerRound -ne $defaults.pomsPerRound) {
+            $diffs += "$($settingsObj.pomsPerRound) sessions"
+        }
+        if ($settingsObj.totalRounds -ne $defaults.totalRounds) {
+            if ($settingsObj.totalRounds -eq 0) {
+                $diffs += "unlimited sets"
+            } else {
+                $diffs += "$($settingsObj.totalRounds) sets"
+            }
+        }
+        if ($settingsObj.totalRounds -gt 1 -and $settingsObj.longBreakMinutes -ne $defaults.longBreakMinutes) {
+            $diffs += "$(Format-Num $settingsObj.longBreakMinutes)m long break"
+        }
+    }
+    elseif ($mode -eq 'M') {
+        if ($settingsObj.reminderText -ne $defaults.reminderText) {
+            $diffs += "custom prompt"
+        }
+        if ($settingsObj.reminderMinutes -ne $defaults.reminderMinutes) {
+            $diffs += "every $(Format-Num $settingsObj.reminderMinutes)m"
+        }
+        if ($settingsObj.dismissSeconds -ne $defaults.dismissSeconds) {
+            $diffs += "$($settingsObj.dismissSeconds)s delay"
+        }
+        if ($settingsObj.totalRounds -ne $defaults.totalRounds) {
+            if ($settingsObj.totalRounds -eq 0) {
+                $diffs += "unlimited"
+            } else {
+                $diffs += "$($settingsObj.totalRounds) prompts"
+            }
+        }
+    }
+    else {
+        if ($settingsObj.reminderText -ne $defaults.reminderText) {
+            $diffs += "custom prompt"
+        }
+        if ($settingsObj.workMinutes -ne $defaults.workMinutes) {
+            $diffs += "$(Format-Num $settingsObj.workMinutes)m work"
+        }
+        if ($settingsObj.reminderMinutes -ne $defaults.reminderMinutes) {
+            $diffs += "every $(Format-Num $settingsObj.reminderMinutes)m"
+        }
+        if ($settingsObj.shortBreakMinutes -ne $defaults.shortBreakMinutes) {
+            $diffs += "$(Format-Num $settingsObj.shortBreakMinutes)m break"
+        }
+        if ($settingsObj.pomsPerRound -ne $defaults.pomsPerRound) {
+            $diffs += "$($settingsObj.pomsPerRound) sessions"
+        }
+    }
+
+    if ($diffs.Count -eq 0) {
+        return "Custom preset"
+    }
+
+    # Join first 3 differences to keep name reasonable length
+    $nameparts = $diffs[0..[math]::Min(2, $diffs.Count - 1)]
+    return ($nameparts -join ", ")
+}
+
+# ============================================================
 # STARTUP SCREEN
 # ============================================================
 $script:mode = 'B'
 $startupDone = $false
 
+# Main startup loop
 while (-not $startupDone) {
-    $defaults = Get-Defaults
-    $presets = Get-Presets
-
     Write-Host ""
     Write-Host "=== MindfulPrompter ==="
     Write-Host ""
-    Write-Host "  Choose your mode:"
-    Write-Host "    P $emDash Pomodoro timer (work/break reminders)"
-    Write-Host "    R $emDash Mindfulness prompts only"
-    Write-Host "    B $emDash Both (Pomodoro + mindfulness prompts)"
-
-    # Show presets if any exist
-    $presetKeys = @()
-    if ($presets -ne $null) {
-        foreach ($prop in $presets.PSObject.Properties) { $presetKeys += $prop.Name }
-    }
-    if ($presetKeys.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  Saved presets:"
-        foreach ($key in ($presetKeys | Sort-Object)) {
-            Write-Host (Format-PresetLine $key $presets.$key)
-        }
-    }
-
+    Write-Host "  Choose your session type:"
+    Write-Host "    P $emDash Pomodoro sessions"
+    Write-Host "    M $emDash Mindfulness sessions"
+    Write-Host "    B $emDash Both (Pomodoro + mindfulness)"
     Write-Host ""
-    Write-Host "  M $emDash Manage settings"
-    Write-Host ""
-    $menuLine = "Choose P/R/B"
-    if ($presetKeys.Count -gt 0) { $menuLine += ", a preset number" }
-    $menuLine += ", or M:"
-    Write-Host $menuLine
-    $quickChoice = Read-Host " "
+    Write-Host "Choose an option:"
+    $modeChoice = Read-Host " "
 
-    # --- Mode P: Pomodoro only ---
-    if ($quickChoice -match '^[Pp]$') {
-        $script:mode = 'P'
-        $soundDisp = if ($defaults.playSound) { "On" } else { "Off" }
-        $setsDisp = if ($defaults.totalRounds -eq 0) { "Unlimited" } else { [string]$defaults.totalRounds }
-        Write-Host ""
-        Write-Host "  Pomodoro defaults:"
-        Write-Host "    Work session:    $(Format-Num $defaults.workMinutes) min"
-        Write-Host "    Break:           $(Format-Num $defaults.shortBreakMinutes) min"
-        Write-Host "    Sessions/set:    $($defaults.pomsPerRound)"
-        if ($defaults.totalRounds -ne 1) {
-            Write-Host "    Long break:      $(Format-Num $defaults.longBreakMinutes) min"
+    if ($modeChoice -match '^[PpMmBb]$') {
+        $script:mode = $modeChoice.ToUpper()
+        if ($script:mode -eq 'R') { $script:mode = 'M' }  # Legacy compatibility
+
+        $defaults = Get-Defaults $script:mode
+        $currentSettings = $defaults.Clone()
+
+        # Mode-specific menu loop
+        $modeMenuDone = $false
+        while (-not $modeMenuDone) {
+            Write-Host ""
+            Write-Host "=== $(Get-ModeName $script:mode) ==="
+            Write-Host ""
+            Write-Host "Press V to view current settings"
+            Write-Host ""
+            Write-Host "  Enter $emDash Start with current settings"
+            Write-Host "  P $emDash Load a preset"
+            Write-Host "  C $emDash Customize for this session only"
+            Write-Host "  D $emDash Edit default settings"
+            Write-Host "  B $emDash Back to mode selection"
+            Write-Host ""
+            Write-Host "Choose an option:"
+            $menuChoice = Read-Host " "
+
+            if ($menuChoice -match '^[Vv]$') {
+                Show-ViewSettings $currentSettings $script:mode
+            }
+            elseif ([string]::IsNullOrWhiteSpace($menuChoice)) {
+                # Start with current settings
+                Apply-Settings $currentSettings
+                $startupDone = $true
+                $modeMenuDone = $true
+            }
+            elseif ($menuChoice -match '^[Pp]$') {
+                # Load a preset
+                $presetResult = Show-PresetSelection $script:mode
+                if ($presetResult -ne $null) {
+                    $currentSettings = $presetResult
+                    Apply-Settings $currentSettings
+                    $startupDone = $true
+                    $modeMenuDone = $true
+                }
+            }
+            elseif ($menuChoice -match '^[Cc]$') {
+                # Customize for this session
+                $customResult = Run-CustomizeFlow $currentSettings $script:mode
+                if ($customResult -ne $null) {
+                    # Show save options
+                    $saveMenuDone = $false
+                    while (-not $saveMenuDone) {
+                        Write-Host ""
+                        Write-Host "Settings customized."
+                        Write-Host ""
+                        Write-Host "Press V to view customized settings"
+                        Write-Host ""
+                        Write-Host "  Enter $emDash Start with these settings"
+                        Write-Host "  P $emDash Save as a preset"
+                        Write-Host "  D $emDash Save as new defaults"
+                        Write-Host "  B $emDash Back (discard changes)"
+                        Write-Host ""
+                        Write-Host "Choose an option:"
+                        $saveChoice = Read-Host " "
+
+                        if ($saveChoice -match '^[Vv]$') {
+                            Show-ViewSettings $customResult $script:mode
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($saveChoice)) {
+                            $currentSettings = $customResult
+                            Apply-Settings $currentSettings
+                            $startupDone = $true
+                            $modeMenuDone = $true
+                            $saveMenuDone = $true
+                        }
+                        elseif ($saveChoice -match '^[Pp]$') {
+                            # Save as preset
+                            $presetSaved = Save-AsPresetNew $customResult $script:mode $defaults
+                            if ($presetSaved) {
+                                Write-Host ""
+                                Write-Host "Press Enter to start with these settings, or B to go back to menu."
+                                $postSave = Read-Host " "
+                                if ([string]::IsNullOrWhiteSpace($postSave)) {
+                                    $currentSettings = $customResult
+                                    Apply-Settings $currentSettings
+                                    $startupDone = $true
+                                    $modeMenuDone = $true
+                                    $saveMenuDone = $true
+                                } else {
+                                    $saveMenuDone = $true
+                                }
+                            }
+                        }
+                        elseif ($saveChoice -match '^[Dd]$') {
+                            # Save as defaults
+                            Write-Host ""
+                            Write-Host "Are you sure you want to change the default settings for $(Get-ModeName $script:mode)? (Y/N):"
+                            $confirm = Read-Host " "
+                            if ($confirm -match '^[Yy]$') {
+                                $settings = Load-Settings
+                                if ($settings -eq $null) { $settings = [pscustomobject]@{} }
+                                $defaultsKey = "defaults$($script:mode)"
+                                $settings | Add-Member -NotePropertyName $defaultsKey -NotePropertyValue $customResult -Force
+                                Save-Settings $settings
+                                Write-Host "Defaults updated!"
+                                $defaults = Get-Defaults $script:mode
+                                $currentSettings = $customResult
+                                Start-Sleep -Seconds 1
+                                Write-Host ""
+                                Write-Host "Press Enter to start with these settings, or B to go back to menu."
+                                $postSave = Read-Host " "
+                                if ([string]::IsNullOrWhiteSpace($postSave)) {
+                                    Apply-Settings $currentSettings
+                                    $startupDone = $true
+                                    $modeMenuDone = $true
+                                    $saveMenuDone = $true
+                                } else {
+                                    $saveMenuDone = $true
+                                }
+                            }
+                        }
+                        elseif ($saveChoice -match '^[Bb]$') {
+                            $saveMenuDone = $true
+                        }
+                        else {
+                            Write-Host "  Invalid choice."
+                        }
+                    }
+                }
+            }
+            elseif ($menuChoice -match '^[Dd]$') {
+                # Edit defaults
+                $newDefaults = Run-CustomizeFlow $defaults $script:mode
+                if ($newDefaults -ne $null) {
+                    Write-Host ""
+                    Write-Host "Save these as new defaults for $(Get-ModeName $script:mode)? (Y/N):"
+                    $confirm = Read-Host " "
+                    if ($confirm -match '^[Yy]$') {
+                        $settings = Load-Settings
+                        if ($settings -eq $null) { $settings = [pscustomobject]@{} }
+                        $defaultsKey = "defaults$($script:mode)"
+                        $settings | Add-Member -NotePropertyName $defaultsKey -NotePropertyValue $newDefaults -Force
+                        Save-Settings $settings
+                        Write-Host "Defaults updated!"
+                        $defaults = Get-Defaults $script:mode
+                        $currentSettings = $defaults.Clone()
+                        Start-Sleep -Seconds 1
+                    }
+                }
+            }
+            elseif ($menuChoice -match '^[Bb]$') {
+                $modeMenuDone = $true
+            }
+            else {
+                Write-Host "  Invalid choice."
+            }
         }
-        Write-Host "    Sets:            $setsDisp"
-        Write-Host "    Sound:           $soundDisp"
-        Write-Host ""
-        Write-Host "  Press Enter to start with these, or C to customize:"
-        $subChoice = Read-Host " "
-        if ($subChoice -match '^[Cc]$') {
-            $customized = Run-CustomizeFlow $defaults 'P'
-            Apply-Settings $customized
-        } else {
-            Apply-Settings $defaults
-            $script:reminderMinutes = $script:workMinutes
-            $script:dismissSeconds = 0
-        }
-        $startupDone = $true
-    }
-    # --- Mode R: Mindfulness only ---
-    elseif ($quickChoice -match '^[Rr]$') {
-        $script:mode = 'R'
-        $soundDisp = if ($defaults.playSound) { "On" } else { "Off" }
-        Write-Host ""
-        Write-Host "  Mindfulness defaults:"
-        Write-Host "    Prompt:          `"$($defaults.reminderText)`""
-        Write-Host "    Prompt every:    $(Format-Num $defaults.reminderMinutes) min"
-        Write-Host "    Dismiss delay:   $($defaults.dismissSeconds) sec"
-        Write-Host "    Prompts:         Unlimited"
-        Write-Host "    Sound:           $soundDisp"
-        Write-Host ""
-        Write-Host "  Press Enter to start with these, or C to customize:"
-        $subChoice = Read-Host " "
-        if ($subChoice -match '^[Cc]$') {
-            $customized = Run-CustomizeFlow $defaults 'R'
-            Apply-Settings $customized
-        } else {
-            Apply-Settings $defaults
-            $script:totalRounds = 0  # unlimited prompts by default
-        }
-        $startupDone = $true
-    }
-    # --- Mode B: Both ---
-    elseif ($quickChoice -match '^[Bb]$') {
-        $script:mode = 'B'
-        Write-Host ""
-        Write-Host "  Combined defaults:"
-        Show-SettingsSummary $defaults
-        Write-Host ""
-        Write-Host "  Press Enter to start with these, or C to customize:"
-        $subChoice = Read-Host " "
-        if ($subChoice -match '^[Cc]$') {
-            $customized = Run-CustomizeFlow $defaults 'B'
-            Apply-Settings $customized
-        } else {
-            Apply-Settings $defaults
-        }
-        $startupDone = $true
-    }
-    # --- M: Settings management ---
-    elseif ($quickChoice -match '^[Mm]$') {
-        Show-ManagementMenu
-    }
-    # --- 0-9: Load a preset ---
-    elseif ($quickChoice -match '^[0-9]$' -and $presetKeys -contains $quickChoice) {
-        $preset = $presets.$quickChoice
-        $script:mode = if ($preset.mode) { $preset.mode } else { 'B' }
-        $presetSettings = @{
-            reminderText = $preset.reminderText
-            workMinutes = [double]$preset.workMinutes
-            reminderMinutes = [double]$preset.reminderMinutes
-            shortBreakMinutes = [double]$preset.shortBreakMinutes
-            pomsPerRound = [int]$preset.pomsPerRound
-            longBreakMinutes = [double]$preset.longBreakMinutes
-            totalRounds = [int]$preset.totalRounds
-            dismissSeconds = [int]$preset.dismissSeconds
-            playSound = [bool]$preset.playSound
-        }
-        Apply-Settings $presetSettings
-        Write-Host ""
-        Write-Host "Loaded preset: `"$($preset.name)`""
-        $startupDone = $true
     }
     else {
         Write-Host "  Invalid choice. Please try again."
     }
-}
-
-# ============================================================
-# SUMMARY & SAVE OFFER
-# ============================================================
-$soundText = if ($playSound) { "On" } else { "Off" }
-
-Write-Host ""
-Write-Host "=========================================="
-
-if ($script:mode -eq 'P') {
-    $workDisplay = Format-Num $workMinutes
-    $shortBreakDisplay = Format-Num $shortBreakMinutes
-    $longBreakDisplay = Format-Num $longBreakMinutes
-    $setsDisplay = if ($totalRounds -eq 0) { "Unlimited" } else { [string]$totalRounds }
-
-    $roundWorkMin = $pomsPerRound * $workMinutes + ($pomsPerRound - 1) * $shortBreakMinutes
-    $roundWithLongMin = $roundWorkMin + $longBreakMinutes
-    if ($totalRounds -eq 0) { $totalTimeDisplay = "Runs until stopped" }
-    elseif ($totalRounds -eq 1) { $totalTimeDisplay = Format-Duration $roundWorkMin }
-    else { $totalTimeDisplay = Format-Duration (($totalRounds - 1) * $roundWithLongMin + $roundWorkMin) }
-
-    Write-Host "  YOUR SETTINGS (Pomodoro):"
-    Write-Host "  Work session:    $workDisplay min"
-    Write-Host "  Break:           $shortBreakDisplay min"
-    Write-Host "  Sessions/set:    $pomsPerRound"
-    if ($totalRounds -ne 1) {
-        Write-Host "  Long break:      $longBreakDisplay min"
-    }
-    Write-Host "  Sets:            $setsDisplay"
-    Write-Host "  Sound:           $soundText"
-    Write-Host "  ---"
-    Write-Host "  Total session:   $totalTimeDisplay"
-}
-elseif ($script:mode -eq 'R') {
-    $reminderDisplay = Format-Num $reminderMinutes
-    $promptsDisplay = if ($totalRounds -eq 0) { "Unlimited" } else { "$totalRounds" }
-    Write-Host "  YOUR SETTINGS (Mindfulness):"
-    Write-Host "  Prompt:          `"$reminderText`""
-    Write-Host "  Prompt every:    $reminderDisplay min"
-    Write-Host "  Dismiss delay:   $dismissSeconds sec"
-    Write-Host "  Prompts:         $promptsDisplay"
-    Write-Host "  Sound:           $soundText"
-    Write-Host "  ---"
-    if ($totalRounds -eq 0) {
-        Write-Host "  Runs until you close the window"
-    } else {
-        $totalDur = $totalRounds * $reminderMinutes
-        Write-Host "  Total session:   $(Format-Duration $totalDur)"
-    }
-}
-else {
-    $workDisplay = Format-Num $workMinutes
-    $reminderDisplay = Format-Num $reminderMinutes
-    $shortBreakDisplay = Format-Num $shortBreakMinutes
-    $longBreakDisplay = Format-Num $longBreakMinutes
-    $setsDisplay = if ($totalRounds -eq 0) { "Unlimited" } else { [string]$totalRounds }
-
-    $roundWorkMin = $pomsPerRound * $workMinutes + ($pomsPerRound - 1) * $shortBreakMinutes
-    $roundWithLongMin = $roundWorkMin + $longBreakMinutes
-    if ($totalRounds -eq 0) { $totalTimeDisplay = "Runs until stopped" }
-    elseif ($totalRounds -eq 1) { $totalTimeDisplay = Format-Duration $roundWorkMin }
-    else { $totalTimeDisplay = Format-Duration (($totalRounds - 1) * $roundWithLongMin + $roundWorkMin) }
-
-    Write-Host "  YOUR SETTINGS (Pomodoro + Mindfulness):"
-    Write-Host "  Prompt:          `"$reminderText`""
-    Write-Host "  Work session:    $workDisplay min"
-    Write-Host "  Prompt every:    $reminderDisplay min"
-    Write-Host "  Break:           $shortBreakDisplay min"
-    Write-Host "  Sessions/set:    $pomsPerRound"
-    if ($totalRounds -ne 1) {
-        Write-Host "  Long break:      $longBreakDisplay min"
-    }
-    Write-Host "  Sets:            $setsDisplay"
-    Write-Host "  Dismiss delay:   $dismissSeconds sec"
-    Write-Host "  Sound:           $soundText"
-    Write-Host "  ---"
-    Write-Host "  Total session:   $totalTimeDisplay"
-}
-
-Write-Host "=========================================="
-Write-Host ""
-Write-Host "Press Enter to begin, or S to save these settings as a preset:"
-$summaryChoice = Read-Host " "
-if ($summaryChoice -match '^[Ss]$') {
-    Save-AsPreset (Get-CurrentSettingsObject)
-    Write-Host ""
-    Write-Host "Press Enter when you're ready to begin."
-    Read-Host | Out-Null
 }
 
 # ============================================================
@@ -1002,9 +1327,9 @@ function Update-Status {
 }
 
 # ============================================================
-# MINDFULNESS-ONLY TIMER (mode R)
+# MINDFULNESS-ONLY TIMER (mode M)
 # ============================================================
-if ($script:mode -eq 'R') {
+if ($script:mode -eq 'M') {
     $startTime = Get-Date
     $lastPromptIndex = 0
     $mReminderSec = $reminderMinutes * 60
